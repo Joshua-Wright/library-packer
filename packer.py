@@ -107,7 +107,7 @@ if __name__ == "__main__":
             sanatized_name = sanatize_name(basename)
             copy_pack_file(lib, tmpfolder+sanatized_name)
 
-    gcc = ['cc', '-Wno-unused-result','-static', '-O3', '-o', 'test', tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
+    gcc = ['cc', '-Wno-unused-result','-static', '-O3', '-o', target, tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
     subprocess.run(gcc)
     shutil.rmtree(tmpfolder)
 
