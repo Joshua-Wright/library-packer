@@ -2,7 +2,7 @@
 
 Bundles payload executable with shared libraries.
 Executable and shared libraries are unpacked at runtime.
-Uses `ldd` to find shared libraries, then embeds them into an executable using `objopy`.
+Uses `ldd` to find shared libraries, then embeds them into an executable using `objcopy`.
 Libraries are found at runtime by setting `LD_LIBRARY_PATH`.
 
 ## Example
