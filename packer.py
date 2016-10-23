@@ -18,12 +18,13 @@ def copy_pack_file(path, out_filename):
 def lib_data_start(lib_name):  return "(&_binary_"           + sanatize_name(lib_name) + "_start[0])"
 def lib_data_length(lib_name): return "((long int)&_binary_" + sanatize_name(lib_name) + "_size)"
 def write_decl(outfile, libs, payload):
-    outfile.write("// objcopy puts the size as the address of the symbol\n")
+    # objcopy puts the size as the address of the symbol
     for lib in libs:
-        outfile.write('extern const char _binary_'     + sanatize_name(lib)     + '_start[];\n')
-        outfile.write('extern const long int _binary_' + sanatize_name(lib)     + '_size;\n')
-    outfile.write('extern const char _binary_'         + sanatize_name(payload) + '_start[];\n')
-    outfile.write('extern const long int _binary_'     + sanatize_name(payload) + '_size;\n')
+        outfile.write('extern const char _binary_'     + sanatize_name(lib) + '_start[];\n')
+        outfile.write('extern const long int _binary_' + sanatize_name(lib) + '_size;\n')
+
+    outfile.write('extern const char _binary_'     + sanatize_name(payload) + '_start[];\n')
+    outfile.write('extern const long int _binary_' + sanatize_name(payload) + '_size;\n')
 
 if __name__ == "__main__":
 
@@ -48,66 +49,77 @@ if __name__ == "__main__":
     # make master libs C file
     with open(tmpfolder+main_filename, "w") as out:
         # write starting info
-        out.write("#include <stdlib.h>\n")
-        out.write("#include <stdint.h>\n")
-        out.write('#include <unistd.h>\n')
-        out.write('#include <fcntl.h>\n')
-        out.write('#include <sys/stat.h>\n')
-        out.write('#include <wait.h>\n')
-        out.write('#include <stdio.h>\n')
-        out.write('#include <string.h>\n')
-        out.write('#include <errno.h>\n')
-
+        out.write("""
+        #include <stdlib.h>
+        #include <stdint.h>
+        #include <unistd.h>
+        #include <fcntl.h>
+        #include <sys/stat.h>
+        #include <wait.h>
+        #include <stdio.h>
+        #include <string.h>
+        #include <errno.h>
+        """)
         # expose extern variables
         write_decl(out, libs, payload)
 
-        out.write('int main(int argc, char **argv) {')
-        out.write('int fd;\n')
-        out.write('char ld_lib_path[512] = {0};\n')
-        out.write('char libpathbuf[256] = {0};\n')
-        out.write('char baselibpath[256] = {0};\n')
-        out.write('sprintf(baselibpath, "/dev/shm/%d/", getpid());\n')
-        out.write('mkdir(baselibpath, 0700);\n')
+        out.write("""
+        int main(int argc, char **argv) {
+            int fd;
+            char ld_lib_path[512] = {0};
+            char libpathbuf[256]  = {0};
+            char baselibpath[256] = {0};
+            char *tmppath         = "/tmp/";
+            if (getenv("TMPDIR")) {
+                tmppath = getenv("TMPDIR");
+            }
+            sprintf(baselibpath, "%s/lib_XXXXXX", tmppath);
+        """)
         for lib in libs:
-            out.write('sprintf(libpathbuf, "%s/%s", baselibpath, "'+os.path.basename(lib)+'");\n')
-            out.write('fd = open(libpathbuf, O_RDWR | O_CREAT, 0700);\n')
-            out.write('write(fd, '+lib_data_start(lib)+', '+lib_data_length(lib)+');\n')
-            out.write('close(fd);\n')
-            out.write('strcat(ld_lib_path, ":");\n')
-            out.write('strcat(ld_lib_path, libpathbuf);\n')
-        # set env
-        out.write('setenv("LD_LIBRARY_PATH", ld_lib_path+1, 1);\n')
-        # write payload
-        out.write('sprintf(libpathbuf, "%s/%s", baselibpath, "'+os.path.basename(payload)+'");\n')
-        out.write('fd = open(libpathbuf, O_RDWR | O_CREAT, 0700);\n')
-        out.write('write(fd, '+lib_data_start(payload)+', '+lib_data_length(payload)+');\n')
-        out.write('close(fd);')
+            out.write("""
+                strcpy(libpathbuf, baselibpath);
+                fd = mkstemp(libpathbuf);
+                unlink(libpathbuf);
+                write(fd, {start}, {length});
+                sprintf(libpathbuf, "/dev/fd/%i", fd);
+                strcat(ld_lib_path, ":");
+                strcat(ld_lib_path, libpathbuf);
+            """.format(
+                basename=os.path.basename(lib), 
+                start=lib_data_start(lib), 
+                length=lib_data_length(lib))
+            )
+        # write payload (close and re-open to get read-only)
+        out.write("""
+            sprintf(libpathbuf, "%s/%i", tmppath, getpid());
+            fd = open(libpathbuf, O_RDWR | O_CREAT | O_EXCL, 0700);
+            write(fd, {start}, {length});
+            close(fd);
+            fd = open(libpathbuf, O_RDONLY);
+            unlink(libpathbuf);
+            sprintf(libpathbuf, "/dev/fd/%i", fd);
+        """.format(
+            start=lib_data_start(payload), 
+            length=lib_data_length(payload))
+        )
 
-        out.write('int pid = vfork();\n')
-        out.write('if (!pid){\n')
-        # intentionally don't overwrite argv[0]
-        out.write('execv(libpathbuf, argv);\n')
-        out.write('printf("error unpacking: %s", strerror(errno));\n')
-        out.write('}\n')
-
-        out.write('waitpid(pid, NULL, 0);\n')
-        for lib in libs:
-            out.write('sprintf(libpathbuf, "%s/%s", baselibpath, "'+os.path.basename(lib)+'");\n')
-            out.write('unlink(libpathbuf);\n')
-        out.write('sprintf(libpathbuf, "%s/%s", baselibpath, "'+os.path.basename(payload)+'");\n')
-        out.write('unlink(libpathbuf);\n')
-        out.write('rmdir(libpathbuf);\n')
-        out.write('}\n')
+        out.write("""
+            char envbuf[1024];
+            sprintf(envbuf, "LD_PRELOAD=%s", ld_lib_path+1);
+            char *env[] = {envbuf, NULL};
+            fexecve(fd, argv, env);
+        }
+        """)
 
         # payload
         copy_pack_file(payload, tmpfolder+'payload')
         # lib data
         for lib in libs:
-            basename = os.path.basename(lib)
+            basename       = os.path.basename(lib)
             sanatized_name = sanatize_name(basename)
             copy_pack_file(lib, tmpfolder+sanatized_name)
 
-    gcc = ['cc', '-Wno-unused-result','-static', '-O3', '-o', target, tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
+    gcc = ['cc', '-Wno-unused-result','-static', '-Os', '-o', target, tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
     subprocess.run(gcc)
     shutil.rmtree(tmpfolder)
 
