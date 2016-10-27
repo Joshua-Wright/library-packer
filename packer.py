@@ -5,7 +5,7 @@ import shutil
 import subprocess
 
 tmpfolder     = ".tmp-package/"
-main_filename = "main.c"
+main_filename = "main.cpp"
 
 def sanatize_name(name):
     for x in "!@#$%^&*(){}[]:;\"'<>,./?\\|-+=":
@@ -22,7 +22,6 @@ def write_decl(outfile, libs, payload):
     for lib in libs:
         outfile.write('extern const char _binary_'     + sanatize_name(lib) + '_start[];\n')
         outfile.write('extern const long int _binary_' + sanatize_name(lib) + '_size;\n')
-
     outfile.write('extern const char _binary_'     + sanatize_name(payload) + '_start[];\n')
     outfile.write('extern const long int _binary_' + sanatize_name(payload) + '_size;\n')
 
@@ -59,31 +58,34 @@ if __name__ == "__main__":
         #include <stdio.h>
         #include <string.h>
         #include <errno.h>
+        #include <iostream>
+        #include <sstream>
+        #include <string>
         """)
         # expose extern variables
         write_decl(out, libs, payload)
 
         out.write("""
         int main(int argc, char **argv) {
-            int fd;
-            char ld_lib_path[512] = {0};
-            char libpathbuf[256]  = {0};
-            char baselibpath[256] = {0};
-            char *tmppath         = "/tmp/";
+            using namespace std;
+            int fd = -1;
+            stringstream ld_lib_path;
+            ld_lib_path << "LD_PRELOAD=";
+            string tmppath = "/tmp/";
+            string libpathbuf;
             if (getenv("TMPDIR")) {
                 tmppath = getenv("TMPDIR");
             }
-            sprintf(baselibpath, "%s/lib_XXXXXX", tmppath);
+            string baselibpath = tmppath + "/llib_XXXXXX";
         """)
+
         for lib in libs:
             out.write("""
-                strcpy(libpathbuf, baselibpath);
-                fd = mkstemp(libpathbuf);
-                unlink(libpathbuf);
-                write(fd, {start}, {length});
-                sprintf(libpathbuf, "/dev/fd/%i", fd);
-                strcat(ld_lib_path, ":");
-                strcat(ld_lib_path, libpathbuf);
+                libpathbuf = baselibpath;
+                fd = mkstemp(&libpathbuf[0]);
+                unlink(libpathbuf.c_str());
+                if (write(fd, {start}, {length}) != {length}) {{return 1;}};
+                ld_lib_path << "/dev/fd/" << fd << ":";
             """.format(
                 basename=os.path.basename(lib), 
                 start=lib_data_start(lib), 
@@ -91,22 +93,21 @@ if __name__ == "__main__":
             )
         # write payload (close and re-open to get read-only)
         out.write("""
-            sprintf(libpathbuf, "%s/%i", tmppath, getpid());
-            fd = open(libpathbuf, O_RDWR | O_CREAT | O_EXCL, 0700);
-            write(fd, {start}, {length});
+            libpathbuf = tmppath + "payload_" + to_string(getpid());
+            fd = open(libpathbuf.c_str(), O_RDWR | O_CREAT | O_EXCL, 0700);
+            if (write(fd, {start}, {length}) != {length}) {{return 1;}};
             close(fd);
-            fd = open(libpathbuf, O_RDONLY);
-            unlink(libpathbuf);
-            sprintf(libpathbuf, "/dev/fd/%i", fd);
+            fd = open(libpathbuf.c_str(), O_RDONLY);
+            unlink(libpathbuf.c_str());
         """.format(
             start=lib_data_start(payload), 
             length=lib_data_length(payload))
         )
 
         out.write("""
-            char envbuf[1024];
-            sprintf(envbuf, "LD_PRELOAD=%s", ld_lib_path+1);
-            char *env[] = {envbuf, NULL};
+            string envbuf = ld_lib_path.str();
+            envbuf.pop_back();
+            char *env[] = {&envbuf[0], NULL};
             fexecve(fd, argv, env);
         }
         """)
@@ -119,7 +120,7 @@ if __name__ == "__main__":
             sanatized_name = sanatize_name(basename)
             copy_pack_file(lib, tmpfolder+sanatized_name)
 
-    gcc = ['cc', '-Wno-unused-result','-static', '-Os', '-o', target, tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
+    gcc = ['c++', '--std=c++11', '-static', '-Os', '-o', target, tmpfolder+main_filename, tmpfolder+'payload'] + [tmpfolder+sanatize_name(os.path.basename(l)) for l in libs]
     subprocess.run(gcc)
     shutil.rmtree(tmpfolder)
 
