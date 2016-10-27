@@ -61,6 +61,8 @@ if __name__ == "__main__":
         #include <iostream>
         #include <sstream>
         #include <string>
+
+        extern char **environ;
         """)
         # expose extern variables
         write_decl(out, libs, payload)
@@ -70,7 +72,7 @@ if __name__ == "__main__":
             using namespace std;
             int fd = -1;
             stringstream ld_lib_path;
-            ld_lib_path << "LD_PRELOAD=";
+            //ld_lib_path << "LD_PRELOAD=";
             string tmppath = "/tmp/";
             string libpathbuf;
             if (getenv("TMPDIR")) {
@@ -107,8 +109,9 @@ if __name__ == "__main__":
         out.write("""
             string envbuf = ld_lib_path.str();
             envbuf.pop_back();
-            char *env[] = {&envbuf[0], NULL};
-            fexecve(fd, argv, env);
+            setenv("LD_PRELOAD", envbuf.c_str(), 1);
+            fexecve(fd, argv, environ);
+            return 1;
         }
         """)
 
